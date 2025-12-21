@@ -10,6 +10,11 @@
 #include "../material/material.hpp"
 #include "../material/layered_iops.hpp"
 #include "../material/z_profile.hpp"
+#include <atomic>
+#include <chrono>
+#include <functional>
+#include <sstream>
+#include <thread>
 
 namespace flick {
   class accurt_user_specified {
@@ -148,8 +153,8 @@ reflection and '1' gives loamy sand reflection)");
   private:
     basic_configuration c_;
     std::shared_ptr<material::base> material_;
-    const std::string tmpdir_ = c_.get<std::string>("flick_tmp_directory_name"); 
-    const std::string output_ = tmpdir_+"/accurtOutput";
+    std::string tmpdir_;
+    std::string output_;
     size_t n_detector_;
     size_t n_reference_;
     double max_height_ = 1;
@@ -199,6 +204,8 @@ reflection and '1' gives loamy sand reflection)");
       c_.add<double>("lpick",0);
       wavelengths_ = c_.get_vector<double>("detector_wavelengths");
       c_.set<double>("detector_wavelengths",wavelengths_*1e9);
+      tmpdir_ = make_run_directory(c_.get<std::string>("flick_tmp_directory_name"));
+      output_ = tmpdir_+"/accurtOutput";
     }
     pp_function relative_radiation() {
       std::string t = c_.get<std::string>("detector_type"); 
@@ -292,6 +299,7 @@ reflection and '1' gives loamy sand reflection)");
       return s;
     }
     void make_material_files() {        
+      ensure_tmp_dirs();
       size_t n_terms = c_.get<size_t>("stream_upper_slab_size");
       stdvector b = depths_to_boundaries(c_.get_vector<double>("layer_depths_upper_slab"));
       layered_upper_slab_ = std::make_shared<layered_iops>(material_,b,
@@ -499,15 +507,26 @@ reflection and '1' gives loamy sand reflection)");
     void run() {
       c_.set_text_qualifiers("#","##");
       c_.set_uppercase(true);
-      system(("mkdir -p " + tmpdir_).c_str());      
+      ensure_tmp_dirs();
       write(c_, tmpdir_+"/accurt",precision_);
-      system(("mkdir -p "+tmpdir_+"/accurtMaterials").c_str());
-      system(("mkdir -p "+tmpdir_+"/accurtOutput").c_str());
       make_material_files();
       int s=system(("DYLD_LIBRARY_PATH=$ACCURT_PATH/lib AccuRT "+tmpdir_+
 		    "/accurt").c_str());
       if (s!=0)
 	throw std::runtime_error("accurt_api");
+    }
+    void ensure_tmp_dirs() {
+      system(("mkdir -p " + tmpdir_).c_str());
+      system(("mkdir -p "+tmpdir_+"/accurtMaterials").c_str());
+      system(("mkdir -p "+tmpdir_+"/accurtOutput").c_str());
+    }
+    std::string make_run_directory(const std::string& base) {
+      static std::atomic<uint64_t> counter{0};
+      auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+      auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
+      std::ostringstream os;
+      os << base << "/run_" << now << "_" << tid << "_" << counter++;
+      return os.str();
     }
     pe_table read_irradiance(const std::string& file_name) {
       std::ifstream ifs(file_name);
